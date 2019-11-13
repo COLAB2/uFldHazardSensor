@@ -314,17 +314,17 @@ bool HazardSensor_MOOSApp::OnStartUp()
   }
 
   // this is to make the mine disappear
-  subscriber.bind("tcp://127.0.0.1:5565");
-  subscriber_add_mine.bind("tcp://127.0.0.1:5505");
   subscriber.setsockopt( ZMQ_SUBSCRIBE, "M" , 1);
   subscriber_add_mine.setsockopt( ZMQ_SUBSCRIBE, "M" , 1);
-  int timeout = 1;
+  int timeout = 2;
   subscriber.setsockopt (ZMQ_RCVTIMEO, &timeout, sizeof (int));
   subscriber.setsockopt (ZMQ_CONFLATE, &timeout, sizeof (int));
   subscriber_add_mine.setsockopt (ZMQ_RCVTIMEO, &timeout, sizeof (int));
   subscriber_add_mine.setsockopt (ZMQ_CONFLATE, &timeout, sizeof (int));
   // this is to inform the disappeared mine to ships
   publisher.bind("tcp://127.0.0.1:5570");
+  subscriber.bind("tcp://127.0.0.1:5565");
+  subscriber_add_mine.bind("tcp://127.0.0.1:5505");
   registerVariables();
   postVisuals();
   perhapsSeedRandom();
@@ -481,12 +481,6 @@ bool HazardSensor_MOOSApp::addSensorConfig(string line)
 bool HazardSensor_MOOSApp::handleNodeReport(const string& node_report_str)
 {
   NodeRecord new_node_record = string2NodeRecord(node_report_str);
-
-  if(!new_node_record.valid()) {
-    Notify("UHZ_DEBUG", "Invalid incoming node report");
-    reportRunWarning("ERROR: Unhandled node record");
-    return(false);
-  }
 
   // In case there is an outstanding RunWarning indicating the lack
   // of a node report for a given vehicle, retract it here. This is
