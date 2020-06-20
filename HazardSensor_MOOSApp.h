@@ -87,7 +87,7 @@ class HazardSensor_MOOSApp : public AppCastingMOOSApp
   bool    updateNodeRecords(NodeRecord);
   bool    updateNodePolygon(unsigned int, bool sensor_on=true);
   void    updateSwathGeometry();
-  void    calcSwathGeometry(double, double&, double&);
+  void    calcSwathGeometry(double, double&, double&, double);
   void    postConfigurationAck(std::string vname);
 
   bool    processSensorRequests();
@@ -120,6 +120,11 @@ class HazardSensor_MOOSApp : public AppCastingMOOSApp
   // Key for each map below is the vehicle name. Swath width and PD are
   // requested by the user. The exp, pfa and pc are determined from that.
   std::map<std::string, double>       m_map_swath_width;
+  // added by sampath gogineni for representing each vehicle length
+  std::map<std::string, double>       m_map_swath_length;
+  // added by sampath gogineni for representing each vehicle sensor swath
+  std::map<std::string, bool>       m_map_swath_show;
+
   std::map<std::string, double>       m_map_swath_roc_exp;
   std::map<std::string, double>       m_map_prob_detect;
   std::map<std::string, double>       m_map_prob_false_alarm;

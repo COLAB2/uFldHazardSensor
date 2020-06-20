@@ -34,14 +34,10 @@
 #include "XYCircle.h"
 #include "MBUtils.h"
 #include "ACTable.h"
-#include "zhelpers.hpp"
+
 
 using namespace std;
 
-zmq::context_t context(1);
-zmq::socket_t subscriber (context, ZMQ_SUB);
-zmq::socket_t subscriber_add_mine (context, ZMQ_SUB);
-zmq::socket_t publisher(context, ZMQ_PUB);
 
 //---------------------------------------------------------
 // Constructor
@@ -121,7 +117,40 @@ bool HazardSensor_MOOSApp::OnNewMail(MOOSMSG_LIST &NewMail)
       postVisuals();
       handled = true;
     }
-
+    else if(key == "SWATH_LENGTH")
+    {
+      m_map_swath_length[comm] = atof(sval.c_str());
+      handled = true;
+    }
+    else if(key == "SHOW_SWATH")
+    {
+        if (sval == "true")
+          m_map_swath_show[comm] = true;
+        else
+          m_map_swath_show[comm] = false;
+    handled = true;
+    }
+    else if(key == "RemoveHazard") {
+      // sends a messsage to GUI pMarineViewer
+      reportEvent("Removed Hazard Label : " +sval);
+      // removes the hazard from the list
+      removeHazard(sval);
+      // makes the mine smaller so it is not visible in GUI pMarineViewer
+      string report = "x=0,y=0,width=0, label=" + sval;
+      Notify("VIEW_MARKER",report);
+      handled = true;
+      Notify("VIEW_MARKER",report);
+    }
+    else if(key == "AddHazard") {
+      // sends a messsage to GUI pMarineViewer
+      reportEvent("Added Hazard : " +sval);
+      // adds the haazard to the list
+      addHazard(sval);
+      // posts the mine for the GUI
+      postVisuals();
+      handled = true;
+      postVisuals();
+    }
     if(!handled)
       reportRunWarning("Unhandled mail: " + key);
   }
@@ -151,6 +180,10 @@ void HazardSensor_MOOSApp::registerVariables()
   Register("UHZ_CLASSIFY_REQUEST", 0);
   Register("UHZ_CONFIG_REQUEST", 0);
   Register("PMV_CONNECT", 0);
+  Register("RemoveHazard", 0);
+  Register("AddHazard", 0);
+  Register("SHOW_SWATH", 0);
+  Register("SWATH_LENGTH", 0);
 }
 
 
@@ -159,29 +192,6 @@ void HazardSensor_MOOSApp::registerVariables()
 
 bool HazardSensor_MOOSApp::Iterate()
 {
-  std::string mine = s_recv (subscriber_add_mine);
-
-  if  ( !mine.empty() && mine.compare("M") != 0)
-  // make the mine disappear
-  // contents has the label for the mine
-  {
-  addHazard(mine);
-  postVisuals();
-  }
-
-  std::string contents = s_recv (subscriber);
-  // check to see if there is a message from midca/ships
-  if  ( !contents.empty() && contents.compare("M") != 0)
-  // make the mine disappear
-  // contents has the label for the mine
-  {
-  removeHazard(contents);
-  string report = "x=0,y=0,width=0, label=" + contents;
-  Notify("VIEW_MARKER",report);
-  s_sendmore(publisher, "M");
-  s_send(publisher,contents);
-  }
-
   AppCastingMOOSApp::Iterate();
 
   // Part 1: Consider posting a settings options summary
@@ -312,19 +322,6 @@ bool HazardSensor_MOOSApp::OnStartUp()
     if(!handled)
       reportUnhandledConfigWarning(orig);
   }
-
-  // this is to make the mine disappear
-  subscriber.setsockopt( ZMQ_SUBSCRIBE, "M" , 1);
-  subscriber_add_mine.setsockopt( ZMQ_SUBSCRIBE, "M" , 1);
-  int timeout = 2;
-  subscriber.setsockopt (ZMQ_RCVTIMEO, &timeout, sizeof (int));
-  subscriber.setsockopt (ZMQ_CONFLATE, &timeout, sizeof (int));
-  subscriber_add_mine.setsockopt (ZMQ_RCVTIMEO, &timeout, sizeof (int));
-  subscriber_add_mine.setsockopt (ZMQ_CONFLATE, &timeout, sizeof (int));
-  // this is to inform the disappeared mine to ships
-  publisher.bind("tcp://127.0.0.1:5570");
-  subscriber.bind("tcp://127.0.0.1:5565");
-  subscriber_add_mine.bind("tcp://127.0.0.1:5505");
   registerVariables();
   postVisuals();
   perhapsSeedRandom();
@@ -581,7 +578,7 @@ bool HazardSensor_MOOSApp::processSensorRequest(string vname)
   //         and perhaps new sensor setting.
   updateNodePolygon(vix, sensor_on);
   // Possibly draw the swath
-  if(m_show_swath) {
+  if(m_map_swath_show[vname]) {
     if(m_show_pd || m_show_pfa) {
       string msg;
       string pd_str  = doubleToString(m_map_prob_detect[vname],2);
@@ -705,7 +702,7 @@ bool HazardSensor_MOOSApp::handleClassifyRequest(const string& request)
   if(!isNumber(priority))
     return(reportRunWarning("Classify request with bad priority:" + priority));
   if(m_map_hazards.count(haz_label) == 0)
-    return(reportRunWarning(vname+" class req for unknown haz label:"+haz_label));
+    return true;
   if(m_map_prob_classify.count(vname) == 0)
     return(reportRunWarning("Error: No classifier config info for: " + vname));
 
@@ -1285,8 +1282,10 @@ bool HazardSensor_MOOSApp::updateNodePolygon(unsigned int ix, bool sensor_on)
   }
   double swath_width = m_map_swath_width[vname];
 
+  double swath_length = m_map_swath_length[vname];
+
   double phi, hypot;
-  calcSwathGeometry(swath_width, phi, hypot);
+  calcSwathGeometry(swath_width, phi, hypot, swath_length);
 
   double x1,y1, hdg1 = angle360(hdg + (90-phi));
   double x2,y2, hdg2 = angle360(hdg + (90+phi));
@@ -1423,9 +1422,9 @@ bool HazardSensor_MOOSApp::processHazardFile(string filename)
 //
 
 void HazardSensor_MOOSApp::calcSwathGeometry(double swath_wid,
-					   double& phi, double& hypot)
+					   double& phi, double& hypot, double swath_length)
 {
-  phi   = atan(m_swath_len / swath_wid);
+  phi   = atan(swath_length / swath_wid);
   hypot = swath_wid / cos(phi);
   phi   = radToDegrees(phi);
 }
@@ -1568,6 +1567,8 @@ bool HazardSensor_MOOSApp::setVehicleSensorSetting(string vname,
   // Part 4: Good. We have new selected sensor settings for this vehicle
   //         Now store selection locally.
   m_map_swath_width[vname]      = selected_width;
+  m_map_swath_length[vname]     = m_swath_len;
+  m_map_swath_show[vname]       = m_show_swath;
   m_map_swath_roc_exp[vname]    = selected_exp;
   m_map_prob_detect[vname]      = selected_pd;
   m_map_prob_false_alarm[vname] = implied_pfa;
